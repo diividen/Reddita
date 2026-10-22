@@ -9,19 +9,19 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from reddit_scraper import SourceRequest, SourceResult
-from reddit_scraper.cli import main
-from reddit_scraper.contract import RedditContractError, normalize_reddit_request
-from reddit_scraper.models import CaptureEnvelope, CaptureGap
-from reddit_scraper.scraper import RedditPage, capture_reddit_pages
-from reddit_scraper.scraper import allow_browser_request
-from reddit_scraper.transport import PublicHttpsBoundary, PublicTransportError
+from reddita import SourceRequest, SourceResult
+from reddita.cli import main
+from reddita.contract import RedditContractError, normalize_reddit_request
+from reddita.models import CaptureEnvelope, CaptureGap
+from reddita.scraper import RedditPage, capture_reddit_pages
+from reddita.scraper import allow_browser_request
+from reddita.transport import PublicHttpsBoundary, PublicTransportError
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-class RedditScraperTests(unittest.TestCase):
+class RedditaTests(unittest.TestCase):
     def test_search_contract_is_canonical_and_bounded(self):
         identity, url = normalize_reddit_request(
             "search", "python tools", {"pageSize": 10, "maxComments": 100},

@@ -1,11 +1,11 @@
-"""Reddit Scraper — read-only Reddit research without an API key or login.
+"""Reddita — read-only Reddit research without an API key or login.
 
 Usage:
-  reddit-scraper search '<query>' [N]             site-wide post search
-  reddit-scraper sub <subreddit> [N]              hot posts in a subreddit
-  reddit-scraper subsearch <subreddit> '<q>' [N]  search within one subreddit
-  reddit-scraper thread <permalink|id> [N]        post body + top N comments
-  reddit-scraper about <subreddit>                community metadata
+  reddita search '<query>' [N]             site-wide post search
+  reddita sub <subreddit> [N]              hot posts in a subreddit
+  reddita subsearch <subreddit> '<q>' [N]  search within one subreddit
+  reddita thread <permalink|id> [N]        post body + top N comments
+  reddita about <subreddit>                community metadata
 
 Flags:
   --json     full JSON output
@@ -14,7 +14,7 @@ Flags:
   --top      sort by top (all-time) — search/sub only
 
 The tool reads public Reddit HTML through a fresh, unauthenticated, GET-only browser
-context. Its private six-hour cache is at ~/.cache/reddit-scraper/. Posting, voting,
+context. Its private six-hour cache is at ~/.cache/reddita/. Posting, voting,
 messaging, and authenticated/private content are intentionally unsupported.
 """
 
@@ -32,7 +32,7 @@ from .scraper import RedditCaptureError, acquire_reddit
 from .cache import canonical_digest, open_private_cache, record_rows
 
 
-DEFAULT_CACHE = Path.home() / ".cache" / "reddit-scraper"
+DEFAULT_CACHE = Path.home() / ".cache" / "reddita"
 
 
 def _subreddit(value: str) -> str:
@@ -135,7 +135,7 @@ def main(
         max_records=max(1, min(count + (1 if operation == "thread" else 0), 10_000)),
         max_pages=1,
     )
-    digest = canonical_digest({"schemaVersion": "reddit-scraper.v1", "request": request.model_dump(mode="json")})
+    digest = canonical_digest({"schemaVersion": "reddita.v1", "request": request.model_dump(mode="json")})
     cache_fd = None if fresh else open_private_cache(cache_root)
     try:
         capture = (acquire or acquire_reddit)(

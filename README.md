@@ -1,4 +1,4 @@
-# Reddit Scraper
+# Reddita
 
 A read-only Reddit research tool for humans and AI agents. It searches public posts, reads subreddit listings and threads, and returns community metadata without an API key, Reddit app, login, or persistent browser profile.
 
@@ -10,7 +10,7 @@ Requires Python 3.12+.
 
 ```bash
 git clone <repository-url>
-cd reddit-scraper
+cd reddita
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
@@ -20,17 +20,17 @@ patchright install chromium
 ## Use
 
 ```bash
-reddit-scraper search "local AI tools" 10
-reddit-scraper sub python 15 --new
-reddit-scraper subsearch LocalLLaMA "quantization" 20 --top
-reddit-scraper thread https://www.reddit.com/r/python/comments/abc123/example/ 25
-reddit-scraper about python
+reddita search "local AI tools" 10
+reddita sub python 15 --new
+reddita subsearch LocalLLaMA "quantization" 20 --top
+reddita thread https://www.reddit.com/r/python/comments/abc123/example/ 25
+reddita about python
 ```
 
 Add `--json` for machine-readable output. Add `--fresh` to bypass the private six-hour cache.
 
 ```bash
-reddit-scraper search "open source OCR" 10 --json > results.json
+reddita search "open source OCR" 10 --json > results.json
 ```
 
 The command exits non-zero on invalid input, a denied network boundary, a browser failure, or an incomplete empty response. Reddit can change its HTML, return `403 Blocked`, or rate-limit unauthenticated requests by network/IP; the tool reports that rather than bypassing it. Treat captures as research evidence, not a guaranteed API.
@@ -39,7 +39,7 @@ The command exits non-zero on invalid input, a denied network boundary, a browse
 
 Share the repository URL and this prompt:
 
-> Install this repository following its README. Use `reddit-scraper ... --json` for public Reddit research. Never add credentials, cookies, login automation, posting, voting, or private-content access. Preserve the request and byte limits. When integrating it, prefer the CLI for subprocess use or the documented Python API for in-process use.
+> Install this repository following its README. Use `reddita ... --json` for public Reddit research. Never add credentials, cookies, login automation, posting, voting, or private-content access. Preserve the request and byte limits. When integrating it, prefer the CLI for subprocess use or the documented Python API for in-process use.
 
 The repository also includes [docs/agent-guide.md](docs/agent-guide.md) and an `AGENTS.md` instruction file that coding agents discover automatically.
 
@@ -48,7 +48,7 @@ The repository also includes [docs/agent-guide.md](docs/agent-guide.md) and an `
 ```python
 import json
 
-from reddit_scraper import SourceBudgets, SourceRequest, acquire_reddit
+from reddita import SourceBudgets, SourceRequest, acquire_reddit
 
 request = SourceRequest(
     source="reddit",
