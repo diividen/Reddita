@@ -115,29 +115,6 @@ class RedditaTests(unittest.TestCase):
         self.assertEqual(path, "/tmp/reddita-profile")
         self.assertIn("--disable-blink-features=AutomationControlled", options["args"])
 
-    def test_persistent_browser_allows_get_and_aborts_state_changing_methods(self):
-        policy = getattr(scraper_module, "_readonly_browser_route", None)
-        self.assertIsNotNone(policy)
-        if policy is None:
-            return
-
-        class Route:
-            def __init__(self, method):
-                self.request = SimpleNamespace(method=method)
-                self.action = None
-
-            def continue_(self):
-                self.action = "continue"
-
-            def abort(self):
-                self.action = "abort"
-
-        get_route, post_route = Route("GET"), Route("POST")
-        policy(get_route)
-        policy(post_route)
-        self.assertEqual(get_route.action, "continue")
-        self.assertEqual(post_route.action, "abort")
-
     def test_transport_rejects_mixed_public_and_private_dns(self):
         boundary = PublicHttpsBoundary(
             allowed_hosts={"old.reddit.com"},

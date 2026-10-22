@@ -367,14 +367,6 @@ def allow_browser_request(method: str, url: str, *, request_count: int, max_requ
     )
 
 
-def _readonly_browser_route(route) -> None:
-    """Let the persistent browser load resources without allowing write methods."""
-    if route.request.method == "GET":
-        route.continue_()
-    else:
-        route.abort()
-
-
 def _number(value: str | None) -> int | None:
     if not value:
         return None
@@ -834,6 +826,8 @@ def _open_browser_context(playwright, *, profile_root: Path | None, allow_stealt
         "locale": "en-US",
         "timezone_id": "UTC",
         "viewport": {"width": 1366, "height": 900},
+        "service_workers": "block",
+        "accept_downloads": False,
     }
     if profile_root is not None:
         context = playwright.chromium.launch_persistent_context(
@@ -880,73 +874,90 @@ def acquire_reddit(
             context, browser = _open_browser_context(
                 playwright, profile_root=profile_root, allow_stealth=allow_stealth,
             )
-            page = context.new_page()
+            try:
+                page = context.new_page()
+                guard = None
+                if native_transport:
+                    from .browser_guard import BrowserGuard
+                    guard = BrowserGuard(request.operation.value, _identity, initial_url,
+                                         max_requests=budgets.max_requests)
+                    guard.attach(context, page)
+                    context.on("page", lambda popup: popup.close())
 
-            def route_request(route):
-                nonlocal request_count
-                request_count += 1
-                if not allow_browser_request(
-                    route.request.method, route.request.url,
-                    request_count=request_count, max_requests=budgets.max_requests,
-                ):
-                    route.abort()
-                    return
-                is_navigation = getattr(route.request, "is_navigation_request", lambda: False)()
-                if is_navigation and not native_transport:
-                    try:
-                        _validate_page_url(request.operation.value, _identity, initial_url,
-                                           route.request.url)
-                    except RedditCaptureError:
+                def route_request(route):
+                    nonlocal request_count
+                    request_count += 1
+                    if not allow_browser_request(
+                        route.request.method, route.request.url,
+                        request_count=request_count, max_requests=budgets.max_requests,
+                    ):
                         route.abort()
-                        raise
-                if native_transport:
-                    route.continue_()
-                else:
-                    _fulfill_reddit_route(
-                        route, network_budget, budgets.timeout_seconds,
-                        boundary=public_boundary,
-                    )
+                        return
+                    is_navigation = getattr(route.request, "is_navigation_request", lambda: False)()
+                    if is_navigation and not native_transport:
+                        try:
+                            _validate_page_url(request.operation.value, _identity, initial_url,
+                                               route.request.url)
+                        except RedditCaptureError:
+                            route.abort()
+                            raise
+                    if native_transport:
+                        route.continue_()
+                    else:
+                        _fulfill_reddit_route(
+                            route, network_budget, budgets.timeout_seconds,
+                            boundary=public_boundary,
+                        )
 
-            if native_transport:
-                page.route("**/*", _readonly_browser_route)
-            else:
-                page.route("**/*", route_request)
-            for _index in range(request.max_pages):
-                if cancelled and cancelled():
-                    raise RedditCaptureError("execution-cancelled", "Reddit capture was cancelled")
-                wait_until = (
-                    "networkidle"
-                    if native_transport and request.operation.value == "about"
-                    else "domcontentloaded"
-                )
-                response = page.goto(url, wait_until=wait_until,
-                                     timeout=budgets.timeout_seconds * 1000)
-                final_url = page.url
-                html = page.content()
-                status = response.status if response is not None else 200
-                if status >= 400:
-                    raise RedditCaptureError(
-                        "http-error", f"Reddit returned HTTP {status}"
+                if not native_transport:
+                    page.route("**/*", route_request)
+                for _index in range(request.max_pages):
+                    if cancelled and cancelled():
+                        raise RedditCaptureError("execution-cancelled", "Reddit capture was cancelled")
+                    wait_until = (
+                        "networkidle"
+                        if native_transport and request.operation.value == "about"
+                        else "domcontentloaded"
                     )
-                if native_transport:
-                    network_budget.add(html.encode("utf-8"))
-                pages.append(RedditPage(url=final_url, html=html, status=status))
-                if request.operation.value in {"thread", "about"}:
-                    break
-                _rows, _contained, next_url = _listing_rows(html, final_url)
-                if not next_url:
-                    break
-                _validate_page_url(request.operation.value,
-                                   normalize_reddit_locator(request.operation.value, request.locator, parameters)[0],
-                                   initial_url, next_url)
-                url = next_url
-                time.sleep(random.uniform(1.0, 2.5))
-            context.close()
-            if browser is not None:
-                browser.close()
+                    response = page.goto(url, wait_until=wait_until,
+                                         timeout=budgets.timeout_seconds * 1000)
+                    if guard is not None:
+                        guard.check_navigation()
+                    final_url = page.url
+                    html = page.content()
+                    status = response.status if response is not None else 200
+                    if status >= 400:
+                        raise RedditCaptureError(
+                            "http-error", f"Reddit returned HTTP {status}"
+                        )
+                    if native_transport:
+                        network_budget.add(html.encode("utf-8"))
+                    pages.append(RedditPage(url=final_url, html=html, status=status))
+                    if request.operation.value in {"thread", "about"}:
+                        break
+                    _rows, _contained, next_url = _listing_rows(html, final_url)
+                    if not next_url:
+                        break
+                    _validate_page_url(request.operation.value,
+                                       normalize_reddit_locator(request.operation.value, request.locator, parameters)[0],
+                                       initial_url, next_url)
+                    url = next_url
+                    time.sleep(random.uniform(1.0, 2.5))
+            finally:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+                if browser is not None:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
     except RedditCaptureError:
         raise
     except Exception:
+        if "guard" in locals() and guard is not None:
+            guard.check_navigation()
         raise RedditCaptureError("browser-failed", "Reddit browser capture failed") from None
     capture = capture_reddit_pages(request, tuple(pages), captured_at=datetime.now(timezone.utc))
     capture = capture.model_copy(update={"settings_digest": settings_digest})
