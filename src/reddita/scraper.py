@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import re
 import stat
 import time
@@ -366,6 +367,14 @@ def allow_browser_request(method: str, url: str, *, request_count: int, max_requ
     )
 
 
+def _readonly_browser_route(route) -> None:
+    """Let the persistent browser load resources without allowing write methods."""
+    if route.request.method == "GET":
+        route.continue_()
+    else:
+        route.abort()
+
+
 def _number(value: str | None) -> int | None:
     if not value:
         return None
@@ -592,7 +601,7 @@ def _validate_page_url(operation: str, identity: str, initial_url: str, page_url
         if parsed.path != f"/comments/{identity}/" or parsed.query:
             raise RedditCaptureError("redirect-denied", "Reddit page changed thread")
     elif operation == "about":
-        if parsed.path != f"/r/{identity}/" or parsed.query:
+        if parsed.path.casefold() != f"/r/{identity}/".casefold() or parsed.query:
             raise RedditCaptureError("redirect-denied", "Reddit page changed subreddit")
     elif operation == "subreddit":
         expected = parse_qsl(initial.query, keep_blank_values=True)
@@ -664,7 +673,7 @@ def capture_reddit_pages(
         if len(page.html.encode()) > MAX_HTML_BYTES:
             raise RedditCaptureError("byte-limit", "Reddit page exceeds its byte limit")
         _validate_page_url(request.operation.value, identity, initial_url, page.url)
-        if page.url != expected_url:
+        if page.url != expected_url and request.operation.value != "about":
             raise RedditCaptureError("redirect-denied", "Reddit pages are not a canonical cursor chain")
         final_url = page.url
         gap = _wall_gap(page)
@@ -812,10 +821,35 @@ def capture_reddit_pages(
     )
 
 
+def _open_browser_context(playwright, *, profile_root: Path | None, allow_stealth: bool):
+    """Open the original persistent Reddit browser, or an isolated API context."""
+    launch_options = {"headless": True}
+    if allow_stealth:
+        launch_options["args"] = ["--disable-blink-features=AutomationControlled"]
+    context_options = {
+        "user_agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "locale": "en-US",
+        "timezone_id": "UTC",
+        "viewport": {"width": 1366, "height": 900},
+    }
+    if profile_root is not None:
+        context = playwright.chromium.launch_persistent_context(
+            str(profile_root), **launch_options, **context_options,
+        )
+        return context, None
+    browser = playwright.chromium.launch(**launch_options)
+    context = browser.new_context(**context_options, java_script_enabled=False)
+    return context, browser
+
+
 def acquire_reddit(
     request: SourceRequest, *, budgets, settings_digest: str,
     cancelled=None, cache_fd: int | None = None,
     allow_stealth: bool = False, allow_active_interaction: bool = False,
+    profile_root: Path | None = None, native_transport: bool = False,
 ) -> RedditCapture:
     # Reddit v1 performs no scripted interaction; carrying this independent
     # permission prevents a future interactive path from inheriting session or
@@ -843,15 +877,8 @@ def acquire_reddit(
     try:
         from patchright.sync_api import sync_playwright
         with sync_playwright() as playwright:
-            launch_options = {"headless": True}
-            if allow_stealth:
-                launch_options["args"] = ["--disable-blink-features=AutomationControlled"]
-            browser = playwright.chromium.launch(**launch_options)
-            context = browser.new_context(
-                user_agent=("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
-                locale="en-US", timezone_id="UTC", viewport={"width": 1366, "height": 900},
-                java_script_enabled=False,
+            context, browser = _open_browser_context(
+                playwright, profile_root=profile_root, allow_stealth=allow_stealth,
             )
             page = context.new_page()
 
@@ -865,27 +892,44 @@ def acquire_reddit(
                     route.abort()
                     return
                 is_navigation = getattr(route.request, "is_navigation_request", lambda: False)()
-                if is_navigation:
+                if is_navigation and not native_transport:
                     try:
                         _validate_page_url(request.operation.value, _identity, initial_url,
                                            route.request.url)
                     except RedditCaptureError:
                         route.abort()
                         raise
-                _fulfill_reddit_route(
-                    route, network_budget, budgets.timeout_seconds,
-                    boundary=public_boundary,
-                )
+                if native_transport:
+                    route.continue_()
+                else:
+                    _fulfill_reddit_route(
+                        route, network_budget, budgets.timeout_seconds,
+                        boundary=public_boundary,
+                    )
 
-            page.route("**/*", route_request)
+            if native_transport:
+                page.route("**/*", _readonly_browser_route)
+            else:
+                page.route("**/*", route_request)
             for _index in range(request.max_pages):
                 if cancelled and cancelled():
                     raise RedditCaptureError("execution-cancelled", "Reddit capture was cancelled")
-                response = page.goto(url, wait_until="domcontentloaded",
+                wait_until = (
+                    "networkidle"
+                    if native_transport and request.operation.value == "about"
+                    else "domcontentloaded"
+                )
+                response = page.goto(url, wait_until=wait_until,
                                      timeout=budgets.timeout_seconds * 1000)
                 final_url = page.url
                 html = page.content()
                 status = response.status if response is not None else 200
+                if status >= 400:
+                    raise RedditCaptureError(
+                        "http-error", f"Reddit returned HTTP {status}"
+                    )
+                if native_transport:
+                    network_budget.add(html.encode("utf-8"))
                 pages.append(RedditPage(url=final_url, html=html, status=status))
                 if request.operation.value in {"thread", "about"}:
                     break
@@ -896,8 +940,10 @@ def acquire_reddit(
                                    normalize_reddit_locator(request.operation.value, request.locator, parameters)[0],
                                    initial_url, next_url)
                 url = next_url
+                time.sleep(random.uniform(1.0, 2.5))
             context.close()
-            browser.close()
+            if browser is not None:
+                browser.close()
     except RedditCaptureError:
         raise
     except Exception:

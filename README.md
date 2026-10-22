@@ -1,8 +1,8 @@
 # Reddita
 
-A read-only Reddit research tool for humans and AI agents. It searches public posts, reads subreddit listings and threads, and returns community metadata without an API key, Reddit app, login, or persistent browser profile.
+A read-only Reddit research tool for humans and AI agents. It searches public posts, reads subreddit listings and threads, and returns community metadata without an API key, Reddit app, or login. It carries forward the original scraper's private persistent browser profile, polite pacing, and six-hour cache.
 
-It is deliberately bounded: HTTPS only, Reddit hosts only, GET requests only, finite request/byte/record limits, and no posting, voting, messaging, authentication, or private content.
+It is deliberately read-only: the browser permits GET requests and aborts state-changing methods. Main navigation is HTTPS and must end on the requested Reddit page. Posting, voting, messaging, authentication, and private content are unsupported.
 
 ## Install
 
@@ -39,7 +39,7 @@ The command exits non-zero on invalid input, a denied network boundary, a browse
 
 Share the repository URL and this prompt:
 
-> Install this repository following its README. Use `reddita ... --json` for public Reddit research. Never add credentials, cookies, login automation, posting, voting, or private-content access. Preserve the request and byte limits. When integrating it, prefer the CLI for subprocess use or the documented Python API for in-process use.
+> Install this repository following its README. Use `reddita ... --json` for public Reddit research. Let Reddita manage its own unauthenticated browser profile; never import a personal profile or add credentials, login automation, posting, voting, or private-content access. When integrating it, prefer the CLI for subprocess use or the documented Python API for in-process use.
 
 The repository also includes [docs/agent-guide.md](docs/agent-guide.md) and an `AGENTS.md` instruction file that coding agents discover automatically.
 
@@ -47,6 +47,7 @@ The repository also includes [docs/agent-guide.md](docs/agent-guide.md) and an `
 
 ```python
 import json
+from pathlib import Path
 
 from reddita import SourceBudgets, SourceRequest, acquire_reddit
 
@@ -67,13 +68,16 @@ capture = acquire_reddit(
     request,
     budgets=SourceBudgets(),
     settings_digest="0" * 64,
+    profile_root=Path.home() / ".local" / "share" / "reddita" / "browser-profile",
+    native_transport=True,
+    allow_stealth=True,
 )
 
 for record in capture.result.records:
     print(json.loads(record.data_json))
 ```
 
-`settings_digest` identifies the caller's effective settings for cache correctness. Use a stable SHA-256 hex digest in production.
+`settings_digest` identifies the caller's effective settings for cache correctness. Use a stable SHA-256 hex digest in production. The CLI is the recommended interface because it creates and validates the private profile and cache directories automatically.
 
 ## Output model
 
@@ -85,14 +89,13 @@ for record in capture.result.records:
 
 ## Safety and scope
 
-- Public `old.reddit.com` and `www.reddit.com` pages only.
-- Fresh JavaScript-disabled browser context for every uncached run.
-- Browser requests are intercepted and fulfilled through a DNS-pinned public HTTPS transport.
-- Private, loopback, link-local, reserved, mixed public/private, changing DNS, non-HTTPS, non-GET, credential, and off-domain routes are denied.
-- Response bytes, requests, pages, records, comments, continuation state, and cache entries are bounded.
+- Main navigation is restricted to the requested public `old.reddit.com` or `www.reddit.com` page.
+- The CLI reuses an unauthenticated profile at `~/.local/share/reddita/browser-profile/`; profile and cache directories are private and reject symlinks.
+- The browser may load GET resources referenced by Reddit, but aborts POST and every other state-changing method.
+- Captured HTML, pages, records, comments, continuation state, and cache entries are bounded.
 - Cache directories and files reject symlinks and unsafe permissions.
 
-This is not an official Reddit client. If Reddit blocks public HTML from the machine running it, use Reddit's official authenticated API instead; do not add stealth, cookies, or login automation to work around the block.
+This is not an official Reddit client. Reddit currently redirects some logged-out old-Reddit listing/search/thread routes to login on some networks. Reddita reports that explicitly instead of returning a fake empty result. If that happens, use Reddit's official authenticated API; do not import a logged-in personal profile.
 
 Use the tool responsibly and comply with applicable laws, Reddit's terms, and community expectations.
 

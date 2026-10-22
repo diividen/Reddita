@@ -13,9 +13,10 @@ Flags:
   --new      sort by new instead of relevance/hot
   --top      sort by top (all-time) — search/sub only
 
-The tool reads public Reddit HTML through a fresh, unauthenticated, GET-only browser
-context. Its private six-hour cache is at ~/.cache/reddita/. Posting, voting,
-messaging, and authenticated/private content are intentionally unsupported.
+The tool reads public Reddit HTML through an unauthenticated, persistent, GET-only
+browser profile at ~/.local/share/reddita/browser-profile/. Its private six-hour
+cache is at ~/.cache/reddita/. Posting, voting, messaging, login, and private content
+are intentionally unsupported.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from .cache import canonical_digest, open_private_cache, record_rows
 
 
 DEFAULT_CACHE = Path.home() / ".cache" / "reddita"
+DEFAULT_PROFILE = Path.home() / ".local" / "share" / "reddita" / "browser-profile"
 
 
 def _subreddit(value: str) -> str:
@@ -92,6 +94,7 @@ def _print_posts(posts: list[dict]) -> None:
 def main(
     argv: list[str] | None = None, *, acquire: Callable | None = None,
     cache_root: Path = DEFAULT_CACHE,
+    profile_root: Path = DEFAULT_PROFILE,
 ) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     json_output = "--json" in raw
@@ -137,6 +140,8 @@ def main(
     )
     digest = canonical_digest({"schemaVersion": "reddita.v1", "request": request.model_dump(mode="json")})
     cache_fd = None if fresh else open_private_cache(cache_root)
+    profile_fd = open_private_cache(profile_root)
+    os.close(profile_fd)
     try:
         capture = (acquire or acquire_reddit)(
             request,
@@ -145,6 +150,7 @@ def main(
                 max_network_bytes=100_000_000, max_storage_bytes=1_000_000_000,
             ),
             settings_digest=digest, cache_fd=cache_fd,
+            profile_root=profile_root, native_transport=True, allow_stealth=True,
         )
     except RedditCaptureError as error:
         raise SystemExit(str(error)) from None

@@ -15,6 +15,8 @@ from reddita.contract import RedditContractError, normalize_reddit_request
 from reddita.models import CaptureEnvelope, CaptureGap
 from reddita.scraper import RedditPage, capture_reddit_pages
 from reddita.scraper import allow_browser_request
+from reddita.scraper import _validate_page_url
+import reddita.scraper as scraper_module
 from reddita.transport import PublicHttpsBoundary, PublicTransportError
 
 
@@ -33,6 +35,36 @@ class RedditaTests(unittest.TestCase):
                 "search", "python", {"pageSize": 101, "maxComments": 100},
             )
 
+    def test_about_accepts_reddits_canonical_subreddit_casing(self):
+        try:
+            _validate_page_url(
+                "about", "python", "https://www.reddit.com/r/python/",
+                "https://www.reddit.com/r/Python/",
+            )
+        except Exception as error:
+            self.fail(f"canonical subreddit casing was rejected: {error}")
+
+    def test_about_capture_accepts_reddits_canonical_subreddit_casing(self):
+        request = SourceRequest(
+            source="reddit", operation="about", locator="python",
+            parameters_json='{"maxComments":100,"pageSize":1}',
+            max_records=1, max_pages=1,
+        )
+        capture = capture_reddit_pages(
+            request,
+            (RedditPage(
+                url="https://www.reddit.com/r/Python/",
+                html=(
+                    '<shreddit-subreddit-header prefixed-name="r/Python" '
+                    'display-name="Python" weekly-active-users="10" '
+                    'weekly-contributions="2" description="Community">'
+                    '</shreddit-subreddit-header>'
+                ),
+            ),),
+            captured_at=NOW,
+        )
+        self.assertTrue(capture.result.envelope.complete)
+
     def test_browser_boundary_is_get_only_and_reddit_only(self):
         self.assertTrue(allow_browser_request(
             "GET", "https://old.reddit.com/r/python/",
@@ -50,6 +82,61 @@ class RedditaTests(unittest.TestCase):
             "GET", "https://old.reddit.com/api/vote",
             request_count=1, max_requests=10,
         ))
+
+    def test_persistent_acquisition_launches_the_named_profile(self):
+        opener = getattr(scraper_module, "_open_browser_context", None)
+        self.assertIsNotNone(opener)
+        if opener is None:
+            return
+
+        class Chromium:
+            def __init__(self):
+                self.persistent = None
+                self.ephemeral = False
+
+            def launch_persistent_context(self, path, **kwargs):
+                self.persistent = (path, kwargs)
+                return "persistent-context"
+
+            def launch(self, **_kwargs):
+                self.ephemeral = True
+                return SimpleNamespace(new_context=lambda **_options: "ephemeral-context")
+
+        chromium = Chromium()
+        context, browser = opener(
+            SimpleNamespace(chromium=chromium),
+            profile_root=Path("/tmp/reddita-profile"),
+            allow_stealth=True,
+        )
+        self.assertEqual(context, "persistent-context")
+        self.assertIsNone(browser)
+        self.assertFalse(chromium.ephemeral)
+        path, options = chromium.persistent
+        self.assertEqual(path, "/tmp/reddita-profile")
+        self.assertIn("--disable-blink-features=AutomationControlled", options["args"])
+
+    def test_persistent_browser_allows_get_and_aborts_state_changing_methods(self):
+        policy = getattr(scraper_module, "_readonly_browser_route", None)
+        self.assertIsNotNone(policy)
+        if policy is None:
+            return
+
+        class Route:
+            def __init__(self, method):
+                self.request = SimpleNamespace(method=method)
+                self.action = None
+
+            def continue_(self):
+                self.action = "continue"
+
+            def abort(self):
+                self.action = "abort"
+
+        get_route, post_route = Route("GET"), Route("POST")
+        policy(get_route)
+        policy(post_route)
+        self.assertEqual(get_route.action, "continue")
+        self.assertEqual(post_route.action, "abort")
 
     def test_transport_rejects_mixed_public_and_private_dns(self):
         boundary = PublicHttpsBoundary(
@@ -116,6 +203,8 @@ class RedditaTests(unittest.TestCase):
         def acquire(source_request, **kwargs):
             observed["request"] = source_request
             observed["cache"] = kwargs["cache_fd"]
+            observed["profile"] = kwargs.get("profile_root")
+            observed["native_transport"] = kwargs.get("native_transport")
             return capture
 
         stdout, stderr = StringIO(), StringIO()
@@ -125,11 +214,14 @@ class RedditaTests(unittest.TestCase):
                     ["search", "fixture", "1", "--json"],
                     acquire=acquire,
                     cache_root=Path(directory) / "cache",
+                    profile_root=Path(directory) / "profile",
                 )
         self.assertEqual((code, stderr.getvalue()), (0, ""))
         self.assertEqual(json.loads(stdout.getvalue())[0]["title"], "Fixture")
         self.assertIsNotNone(observed["cache"])
         self.assertEqual(observed["request"].max_records, 1)
+        self.assertEqual(observed["profile"], Path(directory) / "profile")
+        self.assertTrue(observed["native_transport"])
 
     def test_cli_rejects_an_incomplete_capture_instead_of_printing_empty_success(self):
         incomplete = SimpleNamespace(result=SourceResult(
@@ -151,6 +243,7 @@ class RedditaTests(unittest.TestCase):
                     ["about", "python", "--json", "--fresh"],
                     acquire=lambda *_args, **_kwargs: incomplete,
                     cache_root=Path(directory) / "cache",
+                    profile_root=Path(directory) / "profile",
                 )
         self.assertIn("empty-results", str(caught.exception))
 
